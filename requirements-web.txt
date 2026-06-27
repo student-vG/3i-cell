@@ -1,0 +1,8 @@
+Flask==3.0.3
+Flask-Limiter
+Flask-Talisman
+Flask-WTF
+dnspython==2.8.0
+gunicorn==21.2.0
+pymongo==4.16.0
+python-dotenv==1.0.1

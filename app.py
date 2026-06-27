@@ -15,7 +15,7 @@ from flask import make_response
 from utils.excel_generator import generate_student_export, generate_application_export
 
 app = Flask(__name__)
-app.secret_key = os.urandom(24)
+app.secret_key = os.getenv("SECRET_KEY", "dev-secret-key-change-me")
 
 # Register Blueprints
 app.register_blueprint(file_serving_bp)
@@ -52,7 +52,7 @@ talisman = Talisman(
         'script-src': ["'self'", "'unsafe-inline'", "https://unpkg.com", "https://cdn.jsdelivr.net"],
         'style-src': ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com", "https://unpkg.com"]
     },
-    force_https=False  # Set to True in production with proper SSL
+    force_https=os.getenv("FORCE_HTTPS", "false").lower() == "true"
 )
 
 # 3. CSRF Protection
@@ -63,7 +63,7 @@ csrf = CSRFProtect(app)
 app.config.update(
     SESSION_COOKIE_HTTPONLY=True,
     SESSION_COOKIE_SAMESITE='Lax',
-    SESSION_COOKIE_SECURE=False # Set to True in production (HTTPS)
+    SESSION_COOKIE_SECURE=os.getenv("SESSION_COOKIE_SECURE", "false").lower() == "true"
 )
 
 # Initialize DB
@@ -2483,23 +2483,32 @@ def update_resume():
 
     if file:
         student = students_collection.find_one({'user_id': ObjectId(session['user_id'])})
-        
-        # Remove old file
-        old_filename = student.get('resume_path')
-        if old_filename:
-            old_path = os.path.join(app.config['UPLOAD_FOLDER'], old_filename)
-            if os.path.exists(old_path):
-                os.remove(old_path)
-                
-        # Save new file
+
+        # Remove any previous resume stored for this student.
+        fs = get_fs()
+        old_files = list(fs.find({
+            "metadata.user_id": ObjectId(session['user_id']),
+            "metadata.type": "resume"
+        }))
+        for old_file in old_files:
+            try:
+                fs.delete(old_file._id)
+            except Exception:
+                pass
+
+        # Save the new resume in GridFS so it survives free-host restarts.
         new_filename = f"{secure_filename(session['email'])}_{secure_filename(file.filename)}"
-        new_path = os.path.join(app.config['UPLOAD_FOLDER'], new_filename)
-        file.save(new_path)
+        resume_id = fs.put(
+            file.read(),
+            filename=new_filename,
+            content_type=file.content_type,
+            metadata={'user_id': ObjectId(session['user_id']), 'type': 'resume'}
+        )
         
         # Update DB
         students_collection.update_one(
             {'user_id': ObjectId(session['user_id'])},
-            {'$set': {'resume_path': new_filename}}
+            {'$set': {'resume_file_id': resume_id}, '$unset': {'resume_path': ""}}
         )
         
         flash("Resume updated successfully!", "success")
